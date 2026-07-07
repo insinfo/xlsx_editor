@@ -565,11 +565,22 @@ class GridRenderer {
     final w = layout.cols.posOf(selection.c2 + 1) - x;
     final h = layout.rows.posOf(selection.r2 + 1) - y;
 
-    // Preenchimento translúcido (exceto célula ativa).
+    // Preenchimento translúcido, exceto sobre a célula ativa (4 retângulos
+    // ao redor dela).
+    final a = layout.cellRect(active.row, active.col);
     ctx.fillStyle = 'rgba(16,124,65,0.10)'.toJS;
-    ctx.fillRect(x, y, w, h);
-    final activeRect = layout.cellRect(active.row, active.col);
-    ctx.clearRectPreservingFills(activeRect, this);
+    final topH = (a.y - y).clamp(0.0, h);
+    final bottomY = a.y + a.h;
+    final leftW = (a.x - x).clamp(0.0, w);
+    final rightX = a.x + a.w;
+    if (topH > 0) ctx.fillRect(x, y, w, topH);
+    if (bottomY < y + h) ctx.fillRect(x, bottomY, w, y + h - bottomY);
+    final midY = y + topH;
+    final midH = (bottomY < y + h ? bottomY : y + h) - midY;
+    if (midH > 0) {
+      if (leftW > 0) ctx.fillRect(x, midY, leftW, midH);
+      if (rightX < x + w) ctx.fillRect(rightX, midY, x + w - rightX, midH);
+    }
 
     ctx.strokeStyle = '#107C41'.toJS;
     ctx.lineWidth = 2;
@@ -671,24 +682,5 @@ class GridRenderer {
     ctx.lineTo(headerW + 0.5, viewH);
     ctx.stroke();
     ctx.textBaseline = 'alphabetic';
-  }
-}
-
-/// Extensão auxiliar: "limpa" o realce de seleção sobre a célula ativa
-/// repintando fundo + conteúdo dela (a célula ativa fica branca no Excel).
-extension on web.CanvasRenderingContext2D {
-  void clearRectPreservingFills(
-      ({double x, double y, double w, double h}) rect, GridRenderer r) {
-    // Repinta apenas o retângulo com fundo branco translúcido inverso não é
-    // trivial; o efeito visual do Excel é a célula ativa sem véu verde.
-    // Estratégia: pinta branco translúcido equivalente ao véu para anular.
-    save();
-    globalCompositeOperation = 'destination-out';
-    fillStyle = 'rgba(0,0,0,1)'.toJS;
-    // não é possível "des-pintar" só o véu; aproximação: véu branco.
-    restore();
-    // Aproximação simples: véu branco sobre a célula ativa.
-    fillStyle = 'rgba(255,255,255,0.5)'.toJS;
-    fillRect(rect.x, rect.y, rect.w, rect.h);
   }
 }

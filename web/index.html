@@ -1,13 +1,205 @@
 <!DOCTYPE html>
-<html>
+<html lang="pt-BR">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Xlsx Editor</title>
+    <title>Editor XLSX — Dart puro</title>
     <script defer src="main.dart.js"></script>
-    
+    <style>
+        :root {
+            --xe-green: #107C41;
+            --xe-green-dark: #0E6B39;
+            --xe-gray: #f3f2f1;
+            --xe-border: #d1d1d1;
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            font-family: "Segoe UI", Arial, sans-serif;
+            font-size: 13px;
+        }
+
+        .xe-root {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background: var(--xe-gray);
+        }
+
+        /* ---- Toolbar ---- */
+        .xe-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 8px;
+            background: var(--xe-gray);
+            border-bottom: 1px solid var(--xe-border);
+            flex-wrap: wrap;
+        }
+
+        .xe-group {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            padding: 0 6px;
+            border-right: 1px solid var(--xe-border);
+        }
+        .xe-group:last-child { border-right: none; }
+
+        .xe-btn {
+            border: 1px solid transparent;
+            background: transparent;
+            border-radius: 3px;
+            min-width: 26px;
+            height: 26px;
+            padding: 0 5px;
+            cursor: pointer;
+            font-size: 14px;
+            line-height: 1;
+            color: #333;
+        }
+        .xe-btn:hover { background: #e1dfdd; border-color: #c8c6c4; }
+
+        .xe-toolbar select, .xe-toolbar input[type="color"] {
+            height: 26px;
+            border: 1px solid var(--xe-border);
+            border-radius: 3px;
+            background: #fff;
+            font-size: 12px;
+        }
+        .xe-font { width: 130px; }
+        .xe-size { width: 52px; }
+        .xe-fmt { width: 150px; }
+        .xe-color { width: 34px; padding: 1px 2px; cursor: pointer; }
+
+        /* ---- Barra de fórmulas ---- */
+        .xe-formulabar {
+            display: flex;
+            align-items: center;
+            background: #fff;
+            border-bottom: 1px solid var(--xe-border);
+            height: 28px;
+        }
+        .xe-namebox {
+            width: 90px;
+            height: 100%;
+            border: none;
+            border-right: 1px solid var(--xe-border);
+            text-align: center;
+            font-size: 12px;
+            outline: none;
+        }
+        .xe-fx {
+            width: 32px;
+            text-align: center;
+            color: #666;
+            font-style: italic;
+            font-family: Georgia, serif;
+            border-right: 1px solid var(--xe-border);
+            height: 100%;
+            line-height: 28px;
+            user-select: none;
+        }
+        .xe-formulainput {
+            flex: 1;
+            height: 100%;
+            border: none;
+            padding: 0 8px;
+            font-size: 12px;
+            font-family: Consolas, monospace;
+            outline: none;
+        }
+
+        /* ---- Grade ---- */
+        .xe-grid {
+            position: relative;
+            flex: 1;
+            overflow: hidden;
+            background: #fff;
+        }
+        .xe-canvas {
+            position: absolute;
+            left: 0;
+            top: 0;
+            pointer-events: none;
+        }
+        .xe-scroller {
+            position: absolute;
+            inset: 0;
+            overflow: auto;
+            outline: none;
+            cursor: cell;
+        }
+        .xe-spacer {
+            width: 1px;
+            height: 1px;
+        }
+        .xe-editor {
+            position: absolute;
+            display: none;
+            z-index: 10;
+            border: 2px solid var(--xe-green);
+            outline: none;
+            resize: none;
+            padding: 1px 3px;
+            background: #fff;
+            overflow: hidden;
+            white-space: pre;
+        }
+
+        /* ---- Rodapé ---- */
+        .xe-footer {
+            display: flex;
+            align-items: center;
+            background: var(--xe-gray);
+            border-top: 1px solid var(--xe-border);
+            height: 28px;
+            padding: 0 8px;
+            gap: 12px;
+        }
+        .xe-tabs { display: flex; gap: 2px; }
+        .xe-tab {
+            border: 1px solid var(--xe-border);
+            border-top: none;
+            background: #fff;
+            padding: 3px 14px;
+            cursor: pointer;
+            font-size: 12px;
+            border-radius: 0 0 4px 4px;
+        }
+        .xe-tab-active {
+            color: var(--xe-green-dark);
+            font-weight: 600;
+            border-bottom: 2px solid var(--xe-green);
+        }
+        .xe-status {
+            flex: 1;
+            text-align: right;
+            color: #444;
+            font-size: 12px;
+            user-select: none;
+        }
+        .xe-zoom select { height: 22px; font-size: 12px; }
+
+        /* ---- Loading ---- */
+        .xe-loading {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 15px;
+            color: #555;
+            background: var(--xe-gray);
+        }
+    </style>
 </head>
 <body>
-   
+    <div id="loading" class="xe-loading">Carregando planilha…</div>
 </body>
 </html>

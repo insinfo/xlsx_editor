@@ -4,3 +4,7 @@ pubspec.lock
 errors.txt
 
 referencias/grida-main/
+
+.local-chrome/
+
+build/

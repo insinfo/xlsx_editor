@@ -1,33 +1,27 @@
 import 'dart:js_interop';
 
 import 'package:web/web.dart' as web;
+import 'package:xlsx_editor/xlsx_editor.dart';
 
+/// Planilha aberta por padrão (servida junto com o app).
+const _defaultFile = 'planilha.xlsx';
 
-void main() {
-  // final fileInput = web.document.getElementById('fileInput') as web.HTMLInputElement;
-  // final container = web.document.getElementById('container') as web.HTMLElement;
+Future<void> main() async {
+  final body = web.document.body!;
+  final loading = web.document.getElementById('loading');
 
-  // fileInput.addEventListener('change', (web.Event e) {
-  //   final files = fileInput.files;
-  //   if (files != null && files.length > 0) {
-  //     final file = files.item(0)!;
-  //     final reader = web.FileReader();
-      
-  //     reader.onload = (web.Event _) {
-  //       final buffer = reader.result as JSArrayBuffer;
-  //       final bytes = buffer.toDart.asUint8List();
-        
-  //       container.innerHTML = ''.toJS; // clear
-        
-  //       // Use docx_rendering to render
-  //       renderAsync(bytes, container, null, null).then((_) {
-  //         print('Render complete!');
-  //       }).catchError((e) {
-  //         print('Render error: $e');
-  //       });
-  //     }.toJS;
-      
-  //     reader.readAsArrayBuffer(file);
-  //   }
-  // }.toJS);
+  try {
+    final response = await web.window.fetch(_defaultFile.toJS).toDart;
+    if (!response.ok) {
+      throw StateError('HTTP ${response.status}');
+    }
+    final buffer = await response.arrayBuffer().toDart;
+    final bytes = buffer.toDart.asUint8List();
+    loading?.remove();
+    SpreadsheetApp(body, bytes);
+  } catch (err) {
+    if (loading != null) {
+      loading.textContent = 'Falha ao carregar $_defaultFile: $err';
+    }
+  }
 }

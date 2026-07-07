@@ -21,10 +21,15 @@ class FormattedResult {
 
   /// Cor declarada na seção usada, ex.: "FF0000" para [Red]; null se nenhuma.
   final String? colorArgbHex; // sem '#', formato AARRGGBB ou RRGGBB
-  const FormattedResult(this.text, [this.colorArgbHex]);
+
+  /// Posição em [text] onde havia um preenchimento `*x` (formatos contábeis:
+  /// "R$" ancorado à esquerda, número à direita). null se não há `*`.
+  final int? splitIndex;
+
+  const FormattedResult(this.text, [this.colorArgbHex, this.splitIndex]);
 
   @override
-  String toString() => 'FormattedResult($text, $colorArgbHex)';
+  String toString() => 'FormattedResult($text, $colorArgbHex, $splitIndex)';
 }
 
 /// Formato numérico ECMA-376 compilado (imutável, cacheado).
@@ -99,9 +104,12 @@ class NumberFormat {
     } else {
       sec = _sections.length >= 3 ? _sections[2] : _sections[0];
     }
-    var out = _renderTokens(sec, number: rv);
-    if (autoSign && !sec.isDate) out = '-$out';
-    return FormattedResult(out, sec.colorHex);
+    var (out, split) = _renderTokens(sec, number: rv);
+    if (autoSign && !sec.isDate) {
+      out = '-$out';
+      if (split != null) split += 1;
+    }
+    return FormattedResult(out, sec.colorHex, split);
   }
 
   // ----------------------------------------------------------------- texto
@@ -119,13 +127,16 @@ class NumberFormat {
       }
     }
     if (sec == null) return FormattedResult(s);
-    return FormattedResult(_renderTokens(sec, text: s), sec.colorHex);
+    final (out, split) = _renderTokens(sec, text: s);
+    return FormattedResult(out, sec.colorHex, split);
   }
 
   // ------------------------------------------------------------ renderização
 
-  String _renderTokens(_Section sec, {num? number, String? text}) {
+  /// Renderiza os tokens; retorna o texto e a posição do primeiro `*` (fill).
+  (String, int?) _renderTokens(_Section sec, {num? number, String? text}) {
     final sb = StringBuffer();
+    int? split;
     _DateParts? dp;
     if (sec.isDate && number != null) dp = _dateParts(number, sec);
     for (final t in sec.toks) {
@@ -133,6 +144,8 @@ class NumberFormat {
         sb.write(t.text);
       } else if (t is _SpaceTok) {
         sb.write(' '); // `_x` vira um espaço
+      } else if (t is _FillTok) {
+        split ??= sb.length; // `*x`: divisão esquerda/direita
       } else if (t is _TextTok) {
         sb.write(text ?? (number != null ? _general(number) : ''));
       } else if (t is _GeneralTok) {
@@ -155,7 +168,7 @@ class NumberFormat {
         }
       }
     }
-    return sb.toString();
+    return (sb.toString(), split);
   }
 
   // ------------------------------------------------------- número decimal
@@ -588,7 +601,8 @@ class NumberFormat {
         raws.add(_Raw(_RK.space)); // `_x` -> espaço
         i += 2;
       } else if (c == '*') {
-        i += 2; // `*x` -> preenchimento ignorado
+        raws.add(const _Raw(_RK.fill)); // `*x` -> marca ponto de divisão
+        i += 2;
       } else if (c == '[') {
         final j = src.indexOf(']', i);
         final content = j < 0 ? src.substring(i + 1) : src.substring(i + 1, j);
@@ -713,6 +727,9 @@ class NumberFormat {
         case _RK.space:
           toks.add(const _SpaceTok());
           break;
+        case _RK.fill:
+          toks.add(const _FillTok());
+          break;
         case _RK.text:
           toks.add(const _TextTok());
           break;
@@ -806,6 +823,10 @@ class NumberFormat {
           break;
         case _RK.space:
           toks.add(const _SpaceTok());
+          i++;
+          break;
+        case _RK.fill:
+          toks.add(const _FillTok());
           i++;
           break;
         case _RK.text:
@@ -1078,6 +1099,10 @@ class _LitTok extends _Tok {
   const _LitTok(this.text);
 }
 
+class _FillTok extends _Tok {
+  const _FillTok();
+}
+
 class _SpaceTok extends _Tok {
   const _SpaceTok();
 }
@@ -1121,6 +1146,7 @@ class _SubSecTok extends _Tok {
 enum _RK {
   lit,
   space,
+  fill,
   text,
   general,
   percent,

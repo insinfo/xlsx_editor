@@ -97,3 +97,21 @@ web/          index.html + main.dart (bootstrap, abre o arquivo-alvo)
 - **calcChain**: nunca reescrever; remover + fullCalcOnLoad.
 - **Array formulas**: avaliador com contexto array só para o padrão `MEDIAN(IF(range=x,range))`
   presente no arquivo; genérico fica para v2.
+
+
+Melhorias aplicadas — recarregue localhost:8088 (Ctrl+F5)
+Comparando seus screenshots lado a lado, ataquei as quatro diferenças mais visíveis em relação ao Excel:
+
+1. Formato contábil com preenchimento * (a maior diferença visual). No Excel, _("R$ "* #,##0.00_) ancora o R$ na borda esquerda da célula e o número na direita — era por isso que as colunas cinza (L, M, N, P) ficavam diferentes. Implementei o token de fill no motor de formato (number_format.dart agora retorna splitIndex no FormattedResult) e o renderer desenha as duas partes ancoradas em lados opostos. No screenshot novo, R$      303.096,17 fica idêntico ao Excel.
+
+2. "EXCESSIVAMENTE ELEVADO" cortado. Meu wrap só quebrava em espaços; quando a palavra é maior que a coluna, o Excel quebra por caractere. Agora o _wrapText faz o mesmo: renderiza "EXCESSIVAM / ENTE / ELEVADO" em 3 linhas, sem comer o "E" inicial.
+
+3. Headers estilo Excel. Números de linha agora alinhados à direita (não centralizados), fonte menor (10px), e a seleção ganha o filete verde de 2px na borda interna do header de linha/coluna — o mesmo detalhe do Excel moderno.
+
+4. Interação. A toolbar agora reflete a fonte e o tamanho da célula ativa ao navegar (como o Excel), e Ctrl+roda do mouse faz zoom pelos degraus 50–200%.
+
+Validação: analyzer limpo, 105 testes VM passando (os 59 do numfmt continuam verdes com o novo splitIndex), e o teste de edição headless confirma que o recálculo continua funcionando (D12 → 100000 recalculou L8 para R$ 282.129,75).
+
+Uma observação sobre o que não mudei: o formato "R$" #,##0.00 simples (colunas D, E, F, O) sai compacto e alinhado à direita — no seu screenshot do Excel ele também é compacto, então já estava fiel.
+
+continuar aproximando do Excel, os próximos candidatos naturais seriam: alça de preenchimento funcional (arrastar para copiar/série), autofit de coluna por duplo clique na borda do header, e menu de contexto (inserir/excluir linhas com deslocamento de fórmulas).

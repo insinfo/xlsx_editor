@@ -43,6 +43,9 @@ class Cell {
   String? formattedCache;
   String? formattedColorCache;
 
+  /// Posição do preenchimento `*` (formatos contábeis); -1 = sem split.
+  int formattedSplitCache = -1;
+
   Cell({this.value, this.formula, this.isArrayFormula = false, this.styleIndex = 0});
 
   bool get isEmpty => value == null && formula == null;
@@ -59,6 +62,7 @@ class Cell {
   void invalidateFormat() {
     formattedCache = null;
     formattedColorCache = null;
+    formattedSplitCache = -1;
   }
 }
 

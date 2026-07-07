@@ -130,13 +130,16 @@ class GridRenderer {
     return w;
   }
 
-  /// Texto formatado + cor de uma célula (com cache na célula).
-  (String, String?) formattedText(Cell cell, ResolvedStyle style) {
+  /// Texto formatado + cor + split contábil de uma célula (cache na célula).
+  (String, String?, int) formattedText(Cell cell, ResolvedStyle style) {
     final cached = cell.formattedCache;
-    if (cached != null) return (cached, cell.formattedColorCache);
+    if (cached != null) {
+      return (cached, cell.formattedColorCache, cell.formattedSplitCache);
+    }
     final raw = cell.raw;
     String text;
     String? color;
+    var split = -1;
     if (raw == null) {
       text = '';
     } else if (cell.value is ErrorValue) {
@@ -144,6 +147,7 @@ class GridRenderer {
     } else {
       final result = style.numFmt.format(raw);
       text = result.text;
+      split = result.splitIndex ?? -1;
       final argb = result.colorArgbHex;
       if (argb != null) {
         color = '#${argb.length == 8 ? argb.substring(2) : argb}';
@@ -151,7 +155,8 @@ class GridRenderer {
     }
     cell.formattedCache = text;
     cell.formattedColorCache = color;
-    return (text, color);
+    cell.formattedSplitCache = split;
+    return (text, color, split);
   }
 
   // -------------------------------------------------------------------------
@@ -311,8 +316,39 @@ class GridRenderer {
       ({double x, double y, double w, double h}) rect,
       {required bool allowSpill}) {
     final style = resolveStyle(sheet.effectiveStyleIndex(r, c));
-    final (text, fmtColor) = formattedText(cell, style);
+    final (text, fmtColor, split) = formattedText(cell, style);
     if (text.isEmpty) return;
+
+    // Formato contábil com `*`: parte esquerda ancorada à esquerda e parte
+    // direita ancorada à direita (ex.: "R$        303.096,17").
+    if (split >= 0 && !text.contains('\n')) {
+      const padX = 3.0;
+      ctx.font = style.fontCss;
+      ctx.fillStyle = (fmtColor ?? style.fontColor).toJS;
+      ctx.textBaseline = 'alphabetic';
+      final left = text.substring(0, split);
+      final right = text.substring(split);
+      final rightW = measure(style.fontCss, right);
+      final vAlign = style.alignment.vertical;
+      final lineH = style.fontSizePx * 1.25;
+      double yTop;
+      if (vAlign == 'top') {
+        yTop = rect.y + 2;
+      } else if (vAlign == 'center' || vAlign == 'justify') {
+        yTop = rect.y + (rect.h - lineH) / 2;
+      } else {
+        yTop = rect.y + rect.h - lineH - 2;
+      }
+      final baseline = yTop + style.fontSizePx;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(rect.x, rect.y, rect.w, rect.h);
+      ctx.clip();
+      if (left.isNotEmpty) ctx.fillText(left, rect.x + padX, baseline);
+      ctx.fillText(right, rect.x + rect.w - padX - rightW, baseline);
+      ctx.restore();
+      return;
+    }
 
     final align = style.alignment;
     var horizontal = align.horizontal;
@@ -443,11 +479,28 @@ class GridRenderer {
       var line = StringBuffer();
       for (final word in words) {
         final candidate = line.isEmpty ? word : '$line $word';
-        if (measure(font, candidate) <= maxW || line.isEmpty) {
+        if (measure(font, candidate) <= maxW) {
           line = StringBuffer(candidate);
-        } else {
+          continue;
+        }
+        if (line.isNotEmpty) {
           result.add(line.toString());
+          line = StringBuffer();
+        }
+        // Palavra maior que a célula: quebra por caractere (como o Excel).
+        if (measure(font, word) <= maxW) {
           line = StringBuffer(word);
+        } else {
+          var chunk = StringBuffer();
+          for (final ch in word.split('')) {
+            if (chunk.isNotEmpty &&
+                measure(font, '${chunk.toString()}$ch') > maxW) {
+              result.add(chunk.toString());
+              chunk = StringBuffer();
+            }
+            chunk.write(ch);
+          }
+          line = chunk;
         }
       }
       if (line.isNotEmpty) result.add(line.toString());
@@ -608,10 +661,10 @@ class GridRenderer {
       CellRange selection) {
     final headerW = kHeaderW * zoom;
     final headerH = kHeaderH * zoom;
-    final fontPx = 11 * zoom;
+    final fontPx = 10 * zoom;
 
     // Fundo dos headers.
-    ctx.fillStyle = '#F5F5F5'.toJS;
+    ctx.fillStyle = '#F8F8F8'.toJS;
     ctx.fillRect(0, 0, viewW, headerH);
     ctx.fillRect(0, 0, headerW, viewH);
 
@@ -631,6 +684,9 @@ class GridRenderer {
       if (selected) {
         ctx.fillStyle = '#CAEAD8'.toJS;
         ctx.fillRect(x, 0, w, headerH);
+        // Filete verde na borda interna (como o Excel).
+        ctx.fillStyle = '#107C41'.toJS;
+        ctx.fillRect(x, headerH - 2, w, 2);
       }
       ctx.strokeStyle = '#C6C6C6'.toJS;
       ctx.lineWidth = 1;
@@ -645,7 +701,7 @@ class GridRenderer {
     }
     ctx.restore();
 
-    // Linhas.
+    // Linhas (números alinhados à direita, como o Excel).
     ctx.save();
     ctx.beginPath();
     ctx.rect(0, headerH, headerW, viewH - headerH);
@@ -658,6 +714,8 @@ class GridRenderer {
       if (selected) {
         ctx.fillStyle = '#CAEAD8'.toJS;
         ctx.fillRect(0, y, headerW, h);
+        ctx.fillStyle = '#107C41'.toJS;
+        ctx.fillRect(headerW - 2, y, 2, h);
       }
       ctx.strokeStyle = '#C6C6C6'.toJS;
       ctx.lineWidth = 1;
@@ -668,7 +726,7 @@ class GridRenderer {
       ctx.fillStyle = (selected ? '#0E6B39' : '#444444').toJS;
       final label = '${r + 1}';
       final tw = measure(ctx.font, label);
-      ctx.fillText(label, (headerW - tw) / 2, y + h / 2 + 1);
+      ctx.fillText(label, headerW - 5 - tw, y + h / 2 + 1);
     }
     ctx.restore();
 

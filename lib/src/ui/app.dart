@@ -319,6 +319,25 @@ class SpreadsheetApp {
       _schedulePaint();
     }).toJS);
 
+    // Ctrl+roda = zoom (como no Excel).
+    _scroller.addEventListener(
+        'wheel',
+        ((web.WheelEvent e) {
+          if (!e.ctrlKey) return;
+          e.preventDefault();
+          final steps = ['50', '75', '90', '100', '125', '150', '200'];
+          final current = '${(_zoom * 100).round()}';
+          var idx = steps.indexOf(current);
+          if (idx < 0) idx = 3;
+          idx = (e.deltaY < 0 ? idx + 1 : idx - 1).clamp(0, steps.length - 1);
+          _zoom = int.parse(steps[idx]) / 100.0;
+          sheet.zoomScale = _zoom;
+          _zoomSelect.value = steps[idx];
+          _syncSpacer();
+          _schedulePaint();
+        }).toJS,
+        web.AddEventListenerOptions(passive: false));
+
     _scroller.addEventListener('mousedown',
         ((web.MouseEvent e) => _onMouseDown(e)).toJS);
     web.window.addEventListener('mousemove',
@@ -848,8 +867,34 @@ class SpreadsheetApp {
 
   void _afterSelectionChange({bool updateBar = true}) {
     if (updateBar) _updateFormulaBar();
+    _syncToolbarWithActive();
     _updateStatus();
     _schedulePaint();
+  }
+
+  /// Reflete fonte/tamanho da célula ativa na toolbar (como o Excel).
+  void _syncToolbarWithActive() {
+    final st = wb.styles;
+    final xf = st.xfAt(
+        sheet.effectiveStyleIndex(view.active.row, view.active.col));
+    final font = st.fontOf(xf);
+    for (var i = 0; i < _fontSelect.options.length; i++) {
+      final opt = _fontSelect.options.item(i) as web.HTMLOptionElement;
+      if (opt.value.toLowerCase() == font.name.toLowerCase()) {
+        _fontSelect.value = opt.value;
+        break;
+      }
+    }
+    final sizeText = font.size == font.size.roundToDouble()
+        ? '${font.size.round()}'
+        : '${font.size}';
+    for (var i = 0; i < _sizeSelect.options.length; i++) {
+      final opt = _sizeSelect.options.item(i) as web.HTMLOptionElement;
+      if (opt.value == sizeText) {
+        _sizeSelect.value = sizeText;
+        break;
+      }
+    }
   }
 
   void _scrollIntoView(int row, int col) {

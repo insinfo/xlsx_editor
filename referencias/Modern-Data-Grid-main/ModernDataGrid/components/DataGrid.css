@@ -1,0 +1,11 @@
+.p-icon-field.p-icon-field-left {
+    Margin-right: 18px;
+}
+
+.p-icon-field-left>.p-inputtext {
+
+    padding-left: 2rem !important;
+
+    padding-right: 0px !important;
+
+}

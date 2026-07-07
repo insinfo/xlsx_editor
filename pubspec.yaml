@@ -1,0 +1,32 @@
+name: xlsx_editor
+description: Editor de xlsx like Excel Google sheet web in pure dart for emdbed in web aplications
+version: 1.0.0
+publish_to: none
+# repository: https://github.com/my_org/my_repo
+
+environment:
+  sdk: ^3.6.0
+
+# Add regular dependencies here.
+dependencies:
+  web: ^1.1.1
+  
+
+dev_dependencies:
+  build_runner: ^2.4.15
+  build_web_compilers: ^4.1.1
+  lints: ^5.1.1
+  test: ^1.26.3
+  path: any
+  # for ui testes
+  puppeteer: ^3.19.0
+
+  shelf: ^1.4.1
+  shelf_static: ^1.1.2
+
+dependency_overrides:
+#quebra-compatibilidade entre o analyzer 7.x e o mockito 5.4.5 
+#(o gerador de mocks do mockito usa tipos internos do analyzer 
+#como InterfaceElementImpl; a partir do analyzer 7.4.0 isso quebrou).
+  #analyzer: 7.3.0
+  

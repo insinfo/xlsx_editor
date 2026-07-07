@@ -1,0 +1,12 @@
+{
+  "packages": [
+    "packages/*"
+  ],
+  "command": {
+    "publish": {
+    }
+  },
+  "useWorkspaces": true,
+  "version": "independent",
+  "npmClient": "yarn"
+}

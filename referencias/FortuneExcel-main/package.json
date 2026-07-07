@@ -1,0 +1,56 @@
+{
+  "name": "@corbe30/fortune-excel",
+  "workspaces": [
+    "src/*"
+  ],
+  "version": "2.3.3",
+  "description": "An Excel import/export import library for FortuneSheet",
+  "main": "dist/main.js",
+  "types": "dist/main.d.ts",
+  "keywords": [
+    "fortunesheet",
+    "spreadsheet",
+    "excel"
+  ],
+  "author": "shashankc1705@gmail.com",
+  "homepage": "https://corbe30.github.io/FortuneExcel",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Corbe30/FortuneExcel.git"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@babel/preset-env": "^7.26.0",
+    "@babel/preset-react": "^7.26.3",
+    "@babel/preset-typescript": "^7.26.0",
+    "@fortune-sheet/react": "^1.0.4",
+    "@storybook/addon-essentials": "^7.6.12",
+    "@storybook/addon-interactions": "^7.6.12",
+    "@storybook/addon-links": "^7.6.12",
+    "@storybook/blocks": "^7.6.12",
+    "@storybook/react": "^7.6.12",
+    "@storybook/react-webpack5": "^7.3.2",
+    "@storybook/test": "^7.6.12",
+    "@types/node": "^20.11.16",
+    "jsdom": "^26.1.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "storybook": "^7.6.16",
+    "tsconfig-paths-webpack-plugin": "^4.0.0",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@types/file-saver": "^2.0.7",
+    "dayjs": "^1.11.10",
+    "exceljs": "^4.4.0",
+    "file-saver": "^2.0.5",
+    "jszip": "^3.10.1"
+  },
+  "scripts": {
+    "prepare": "tsc",
+    "test": "npm run prepare && node --test test/transformExcelToFortune.xls_preview.test.js",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build"
+  },
+  "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
+}

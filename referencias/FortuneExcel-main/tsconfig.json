@@ -1,0 +1,17 @@
+{
+  "files": ["src/main.ts"],
+  "compilerOptions": {
+    "jsx": "react",
+    "noImplicitAny": true,
+    "declaration": true,
+    "target": "es5",
+    "outDir": "dist/",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "paths": {
+      "@corbe30/fortune-excel": ["./src/main.ts"],
+    }
+  }
+}

@@ -1,0 +1,395 @@
+/* Tema do editor XLSX embutível — mesma paleta e padrões do
+   canvas-editor-port (azul #185abd, superfícies #f8fafc, bordas #d9dee7).
+   Tudo escopado ao root .xe-embed: sem estilos globais, múltiplas
+   instâncias podem coexistir na mesma página. */
+
+.xe-embed {
+  --xe-border: #d9dee7;
+  --xe-toolbar-bg: #f8fafc;
+  --xe-workspace-bg: #eef1f5;
+  --xe-accent: #185abd;
+  --xe-accent-dark: #1249a0;
+  --xe-hover-bg: #e8f1fc;
+  --xe-hover-border: #b9cce7;
+  --xe-active-bg: #dbe7f7;
+  --xe-active-border: #9dbef0;
+  position: relative;
+  display: flex;
+  min-width: 0;
+  width: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--xe-border);
+  border-radius: 6px;
+  background: #fff;
+  color: #26364d;
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+  font-size: 13px;
+}
+
+.xe-embed *,
+.xe-embed *::before,
+.xe-embed *::after { box-sizing: border-box; }
+
+/* Aparência "excel": identidade verde do Excel (titlebar, aba ativa,
+   estados de hover/ativo), mantendo o mesmo design system. */
+.xe-embed--excel {
+  --xe-accent: #107c41;
+  --xe-accent-dark: #0e6b39;
+  --xe-hover-bg: #e6f3ec;
+  --xe-hover-border: #b3d9c3;
+  --xe-active-bg: #d2ebdd;
+  --xe-active-border: #8fccab;
+}
+
+.xe-hidden { display: none !important; }
+
+/* ── Titlebar (aparência excel) ────────────────────────────────────────── */
+
+.xe-titlebar {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  min-height: 40px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: var(--xe-accent);
+  color: #fff;
+}
+
+.xe-titlebar > .ti { font-size: 20px; }
+
+.xe-titlebar__title {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.xe-titlebar__mode {
+  font-size: 11px;
+  opacity: .86;
+}
+
+/* ── Toolbar ───────────────────────────────────────────────────────────── */
+
+.xe-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  min-height: 40px;
+  padding: 4px 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--xe-border);
+  background: var(--xe-toolbar-bg);
+}
+
+.xe-toolbar--compact { min-height: 42px; }
+
+.xe-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  border-right: 1px solid var(--xe-border);
+}
+
+.xe-group:last-child { border-right: 0; }
+
+.xe-btn {
+  display: inline-flex;
+  min-width: 28px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #27364b;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.xe-toolbar--compact .xe-btn {
+  min-width: 32px;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  font-size: 17px;
+}
+
+.xe-btn:hover,
+.xe-btn:focus-visible {
+  border-color: var(--xe-hover-border);
+  background: var(--xe-hover-bg);
+  color: var(--xe-accent);
+  outline: none;
+}
+
+/* Estado espelhado da seleção (onSelectionChanged → syncSelection). */
+.xe-btn.active {
+  border-color: var(--xe-active-border);
+  background: var(--xe-active-bg);
+  color: var(--xe-accent);
+}
+
+/* Desabilitado apenas visual: o clique continua chegando ao comando (que é
+   no-op sem histórico) — bloquear pointer-events atrasaria 1 frame o undo. */
+.xe-btn.disabled { opacity: .45; }
+
+.xe-select {
+  height: 27px;
+  border: 1px solid #bcc5d2;
+  border-radius: 2px;
+  background: #fff;
+  color: #27364b;
+  font: inherit;
+  font-size: 11px;
+}
+
+.xe-font { width: 118px; }
+.xe-size { width: 48px; }
+.xe-fmt { width: 132px; }
+
+.xe-colorbtn {
+  position: relative;
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #27364b;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.xe-colorbtn:hover {
+  border-color: var(--xe-hover-border);
+  background: var(--xe-hover-bg);
+  color: var(--xe-accent);
+}
+
+.xe-colorbtn__bar {
+  width: 16px;
+  height: 4px;
+  margin-top: 2px;
+  border-radius: 1px;
+}
+
+.xe-colorbtn input[type="color"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  border: 0;
+  padding: 0;
+}
+
+/* ── Barra de fórmulas ─────────────────────────────────────────────────── */
+
+.xe-formulabar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  height: 28px;
+  border-bottom: 1px solid var(--xe-border);
+  background: #fff;
+}
+
+.xe-namebox {
+  width: 90px;
+  height: 100%;
+  border: 0;
+  border-right: 1px solid var(--xe-border);
+  background: transparent;
+  color: inherit;
+  text-align: center;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.xe-namebox:focus { box-shadow: inset 0 0 0 1px var(--xe-accent); }
+
+.xe-fx {
+  width: 32px;
+  height: 100%;
+  border-right: 1px solid var(--xe-border);
+  color: #687386;
+  font-family: Georgia, serif;
+  font-style: italic;
+  line-height: 28px;
+  text-align: center;
+  user-select: none;
+}
+
+.xe-formulainput {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+  outline: none;
+}
+
+/* ── Grade ─────────────────────────────────────────────────────────────── */
+
+.xe-embed__app {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.xe-root {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  background: var(--xe-workspace-bg);
+}
+
+.xe-grid {
+  position: relative;
+  flex: 1;
+  min-height: 120px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.xe-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+
+.xe-scroller {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  outline: none;
+  cursor: cell;
+}
+
+.xe-spacer {
+  width: 1px;
+  height: 1px;
+}
+
+.xe-editor {
+  position: absolute;
+  display: none;
+  z-index: 10;
+  padding: 1px 3px;
+  border: 2px solid var(--xe-accent);
+  background: #fff;
+  outline: none;
+  overflow: hidden;
+  resize: none;
+  white-space: pre;
+}
+
+/* ── Rodapé: abas + status + zoom ──────────────────────────────────────── */
+
+.xe-footer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 27px;
+  padding: 0 8px;
+  border-top: 1px solid var(--xe-border);
+  background: var(--xe-toolbar-bg);
+  color: #445062;
+}
+
+.xe-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  overflow-x: auto;
+}
+
+.xe-tab {
+  min-height: 26px;
+  padding: 3px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: #27364b;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.xe-tab:hover { background: #f1f5fa; }
+
+.xe-tab-active {
+  border-bottom-color: var(--xe-accent);
+  color: var(--xe-accent);
+  font-weight: 600;
+}
+
+.xe-status {
+  flex: 1;
+  color: #445062;
+  font-size: 11.5px;
+  text-align: right;
+  user-select: none;
+}
+
+.xe-zoom select {
+  height: 22px;
+  border: 1px solid #bcc5d2;
+  border-radius: 2px;
+  background: #fff;
+  color: #27364b;
+  font: inherit;
+  font-size: 11.5px;
+}
+
+/* ── Modo visualizador ─────────────────────────────────────────────────── */
+
+.xe-embed--viewer .xe-toolbar { display: none; }
+.xe-embed--viewer .xe-editor { display: none !important; }
+.xe-embed--viewer .xe-scroller { cursor: default; }
+
+/* ── Input de arquivo oculto ───────────────────────────────────────────── */
+
+.xe-file {
+  position: fixed !important;
+  left: -10000px !important;
+  width: 1px !important;
+  height: 1px !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+@media (max-width: 720px) {
+  .xe-titlebar { grid-template-columns: 28px minmax(0, 1fr); }
+  .xe-titlebar__mode { display: none; }
+  .xe-font { width: 92px; }
+  .xe-fmt { width: 104px; }
+}

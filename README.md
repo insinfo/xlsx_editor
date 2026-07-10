@@ -1,5 +1,15 @@
 # xlsx_editor
 
+## Testes
+
+```bash
+dart test
+dart test e2e_test/editor_e2e_test.dart
+```
+
+O segundo comando usa `puppeteer: ^3.19.0`, compila a aplicação web, inicia
+um servidor local em uma porta livre e executa os testes no Chrome headless.
+
 Editor de planilhas `.xlsx` estilo Excel/Google Sheets, **100% Dart** (sem
 dependências externas além de `package:web`), renderizado em HTML5 Canvas.
 

@@ -18,6 +18,72 @@ import '../xlsx/xlsx_reader.dart';
 import '../xlsx/xlsx_writer.dart';
 import 'commands.dart';
 
+/// Opções da shell interna ([SpreadsheetApp]).
+///
+/// A fachada embutível ([XlsxEditorWidget]) monta a toolbar externamente e
+/// controla a shell por estas opções + API pública.
+class SpreadsheetOptions {
+  final bool showFormulaBar;
+  final bool showSheetTabs;
+  final bool showStatusBar;
+  final bool showZoom;
+  final bool readOnly;
+
+  /// Confirma saída da página com alterações não salvas (apenas para apps
+  /// standalone; em embed deixe `false` para não sequestrar o `window`).
+  final bool confirmOnUnload;
+  final GridTheme theme;
+  final void Function()? onChange;
+  final void Function(SelectionStyleState state)? onSelectionChanged;
+  final void Function(Object error)? onError;
+  final void Function(String fileName)? onFileOpened;
+
+  const SpreadsheetOptions({
+    this.showFormulaBar = true,
+    this.showSheetTabs = true,
+    this.showStatusBar = true,
+    this.showZoom = true,
+    this.readOnly = false,
+    this.confirmOnUnload = false,
+    this.theme = GridTheme.blue,
+    this.onChange,
+    this.onSelectionChanged,
+    this.onError,
+    this.onFileOpened,
+  });
+}
+
+/// Estado de estilo da seleção ativa, espelhado na toolbar da fachada.
+class SelectionStyleState {
+  final String fontName;
+  final double fontSize;
+  final bool bold;
+  final bool italic;
+  final bool underline;
+  final String horizontal;
+  final String vertical;
+  final bool wrapText;
+  final bool merged;
+  final String numFmtCode;
+  final bool canUndo;
+  final bool canRedo;
+
+  const SelectionStyleState({
+    required this.fontName,
+    required this.fontSize,
+    required this.bold,
+    required this.italic,
+    required this.underline,
+    required this.horizontal,
+    required this.vertical,
+    required this.wrapText,
+    required this.merged,
+    required this.numFmtCode,
+    required this.canUndo,
+    required this.canRedo,
+  });
+}
+
 /// Estado de visualização por planilha.
 class _SheetView {
   double scrollX = 0;
@@ -54,11 +120,12 @@ class _WorkbookAccess extends WorkbookAccess {
 class SpreadsheetApp {
   XlsxDocument doc;
   late FormulaEngine engine;
+  final SpreadsheetOptions options;
 
   // DOM
   final web.HTMLElement host;
   late web.HTMLDivElement _root;
-  late web.HTMLDivElement _toolbar;
+  late web.HTMLDivElement _formulaBar;
   late web.HTMLInputElement _nameBox;
   late web.HTMLInputElement _formulaInput;
   late web.HTMLDivElement _gridWrap;
@@ -66,8 +133,10 @@ class SpreadsheetApp {
   late web.HTMLDivElement _scroller;
   late web.HTMLDivElement _spacer;
   late web.HTMLTextAreaElement _editor;
+  late web.HTMLDivElement _footer;
   late web.HTMLDivElement _tabs;
   late web.HTMLDivElement _status;
+  late web.HTMLDivElement _zoomWrap;
   late web.HTMLSelectElement _zoomSelect;
   late web.HTMLInputElement _fileInput;
 
@@ -81,8 +150,14 @@ class SpreadsheetApp {
   bool _editing = false;
   bool _editorFromTyping = false;
   bool _dirty = false;
+  bool _readOnly = false;
+  bool _disposed = false;
+  web.ResizeObserver? _resizeObserver;
 
   final CommandStack _commands = CommandStack();
+
+  /// Listeners registrados em `window`/`document` (removidos no [dispose]).
+  final List<(web.EventTarget, String, JSFunction)> _globalListeners = [];
 
   // Drag de seleção / resize.
   bool _selecting = false;
@@ -95,9 +170,13 @@ class SpreadsheetApp {
   Worksheet get sheet => wb.sheets[_sheetIndex];
   SheetLayout get layout => _layouts[_sheetIndex];
   _SheetView get view => _views[_sheetIndex];
+  bool get readOnly => _readOnly;
+  bool get isDirty => _dirty;
 
-  SpreadsheetApp(this.host, Uint8List xlsxBytes)
-      : doc = readXlsx(xlsxBytes) {
+  SpreadsheetApp(this.host, Uint8List xlsxBytes, {SpreadsheetOptions? options})
+      : options = options ?? const SpreadsheetOptions(),
+        doc = readXlsx(xlsxBytes) {
+    _readOnly = this.options.readOnly;
     _initModel();
     _buildDom();
     _renderer = GridRenderer(
@@ -105,8 +184,16 @@ class SpreadsheetApp {
       _canvas.getContext('2d') as web.CanvasRenderingContext2D,
       ImageStore(_schedulePaint),
       (path) => doc.mediaBytes(path),
+      theme: this.options.theme,
     );
     _wireEvents();
+    _resizeObserver = web.ResizeObserver(
+        ((JSArray<web.ResizeObserverEntry> _, web.ResizeObserver __) {
+      if (_disposed) return;
+      _resizeCanvas();
+      _schedulePaint();
+    }).toJS);
+    _resizeObserver!.observe(_gridWrap);
     _sheetIndex = wb.activeSheet;
     _zoom = sheet.zoomScale.clamp(0.5, 2.0);
     _zoomSelect.value = '${(_zoom * 100).round()}';
@@ -150,37 +237,22 @@ class SpreadsheetApp {
     return el;
   }
 
-  web.HTMLButtonElement _btn(web.HTMLElement parent, String html,
-      String title, void Function() onClick) {
-    final b = _el<web.HTMLButtonElement>('button', 'xe-btn', parent);
-    b.innerHTML = html.toJS;
-    b.title = title;
-    b.addEventListener(
-        'click',
-        ((web.Event e) {
-          onClick();
-          _focusGrid();
-        }).toJS);
-    return b;
-  }
-
   void _buildDom() {
     _root = web.document.createElement('div') as web.HTMLDivElement;
     _root.className = 'xe-root';
     host.appendChild(_root);
 
-    // ---- Toolbar ----
-    _toolbar = _el<web.HTMLDivElement>('div', 'xe-toolbar');
-    _buildToolbar();
-
     // ---- Barra de fórmulas ----
-    final fbar = _el<web.HTMLDivElement>('div', 'xe-formulabar');
-    _nameBox = _el<web.HTMLInputElement>('input', 'xe-namebox', fbar);
+    _formulaBar = _el<web.HTMLDivElement>('div', 'xe-formulabar');
+    if (!options.showFormulaBar) _formulaBar.classList.add('xe-hidden');
+    _nameBox = _el<web.HTMLInputElement>('input', 'xe-namebox', _formulaBar);
     _nameBox.spellcheck = false;
-    final fx = _el<web.HTMLDivElement>('div', 'xe-fx', fbar);
+    final fx = _el<web.HTMLDivElement>('div', 'xe-fx', _formulaBar);
     fx.textContent = 'fx';
-    _formulaInput = _el<web.HTMLInputElement>('input', 'xe-formulainput', fbar);
+    _formulaInput =
+        _el<web.HTMLInputElement>('input', 'xe-formulainput', _formulaBar);
     _formulaInput.spellcheck = false;
+    _formulaInput.readOnly = _readOnly;
 
     // ---- Grade ----
     _gridWrap = _el<web.HTMLDivElement>('div', 'xe-grid');
@@ -193,14 +265,19 @@ class SpreadsheetApp {
     _editor.style.display = 'none';
 
     // ---- Rodapé: abas + status ----
-    final footer = _el<web.HTMLDivElement>('div', 'xe-footer');
-    _tabs = _el<web.HTMLDivElement>('div', 'xe-tabs', footer);
-    _status = _el<web.HTMLDivElement>('div', 'xe-status', footer);
-    final zoomWrap = _el<web.HTMLDivElement>('div', 'xe-zoom', footer);
-    _zoomSelect = _el<web.HTMLSelectElement>('select', 'xe-zoomsel', zoomWrap);
+    _footer = _el<web.HTMLDivElement>('div', 'xe-footer');
+    if (!options.showSheetTabs && !options.showStatusBar && !options.showZoom) {
+      _footer.classList.add('xe-hidden');
+    }
+    _tabs = _el<web.HTMLDivElement>('div', 'xe-tabs', _footer);
+    if (!options.showSheetTabs) _tabs.classList.add('xe-hidden');
+    _status = _el<web.HTMLDivElement>('div', 'xe-status', _footer);
+    if (!options.showStatusBar) _status.classList.add('xe-hidden');
+    _zoomWrap = _el<web.HTMLDivElement>('div', 'xe-zoom', _footer);
+    if (!options.showZoom) _zoomWrap.classList.add('xe-hidden');
+    _zoomSelect = _el<web.HTMLSelectElement>('select', 'xe-zoomsel', _zoomWrap);
     for (final z in ['50', '75', '90', '100', '125', '150', '200']) {
-      final opt =
-          web.document.createElement('option') as web.HTMLOptionElement;
+      final opt = web.document.createElement('option') as web.HTMLOptionElement;
       opt.value = z;
       opt.textContent = '$z%';
       _zoomSelect.appendChild(opt);
@@ -213,111 +290,33 @@ class SpreadsheetApp {
     _fileInput.style.display = 'none';
   }
 
-  late web.HTMLSelectElement _fontSelect;
-  late web.HTMLSelectElement _sizeSelect;
-  late web.HTMLSelectElement _fmtSelect;
-  late web.HTMLInputElement _fillColor;
-  late web.HTMLInputElement _fontColor;
-
-  void _buildToolbar() {
-    web.HTMLDivElement group() =>
-        _el<web.HTMLDivElement>('div', 'xe-group', _toolbar);
-
-    final gFile = group();
-    _btn(gFile, '📂', 'Abrir (xlsx)', () => _fileInput.click());
-    _btn(gFile, '💾', 'Salvar como .xlsx (Ctrl+S)', _download);
-    final gUndo = group();
-    _btn(gUndo, '↶', 'Desfazer (Ctrl+Z)', _undo);
-    _btn(gUndo, '↷', 'Refazer (Ctrl+Y)', _redo);
-
-    final gFont = group();
-    _fontSelect = _el<web.HTMLSelectElement>('select', 'xe-font', gFont);
-    for (final f in [
-      'Arial', 'Calibri', 'Times New Roman', 'Courier New', 'Verdana',
-      'Tahoma', 'Segoe UI'
-    ]) {
-      final opt =
-          web.document.createElement('option') as web.HTMLOptionElement;
-      opt.value = f;
-      opt.textContent = f;
-      _fontSelect.appendChild(opt);
-    }
-    _sizeSelect = _el<web.HTMLSelectElement>('select', 'xe-size', gFont);
-    for (final s in ['8', '9', '10', '11', '12', '14', '16', '18', '22', '26']) {
-      final opt =
-          web.document.createElement('option') as web.HTMLOptionElement;
-      opt.value = s;
-      opt.textContent = s;
-      _sizeSelect.appendChild(opt);
-    }
-
-    final gStyle = group();
-    _btn(gStyle, '<b>N</b>', 'Negrito (Ctrl+B)',
-        () => _toggleFont((f) => f.copyWith(bold: !f.bold)));
-    _btn(gStyle, '<i>I</i>', 'Itálico (Ctrl+I)',
-        () => _toggleFont((f) => f.copyWith(italic: !f.italic)));
-    _btn(gStyle, '<u>S</u>', 'Sublinhado (Ctrl+U)',
-        () => _toggleFont((f) => f.copyWith(underline: !f.underline)));
-
-    final gColor = group();
-    _fontColor = _el<web.HTMLInputElement>('input', 'xe-color', gColor);
-    _fontColor.type = 'color';
-    _fontColor.title = 'Cor da fonte';
-    _fillColor = _el<web.HTMLInputElement>('input', 'xe-color', gColor);
-    _fillColor.type = 'color';
-    _fillColor.value = '#ffff00';
-    _fillColor.title = 'Cor de preenchimento';
-
-    final gAlign = group();
-    _btn(gAlign, '⯇', 'Alinhar à esquerda', () => _setAlign(h: 'left'));
-    _btn(gAlign, '≡', 'Centralizar', () => _setAlign(h: 'center'));
-    _btn(gAlign, '⯈', 'Alinhar à direita', () => _setAlign(h: 'right'));
-    _btn(gAlign, '↥', 'Alinhar ao topo', () => _setAlign(v: 'top'));
-    _btn(gAlign, '↕', 'Centralizar vertical', () => _setAlign(v: 'center'));
-    _btn(gAlign, '↧', 'Alinhar abaixo', () => _setAlign(v: 'bottom'));
-    _btn(gAlign, '⏎', 'Quebrar texto', _toggleWrap);
-
-    final gCell = group();
-    _btn(gCell, '⬒', 'Mesclar / desfazer mesclagem', _toggleMerge);
-    _btn(gCell, '▦', 'Bordas (todas)', () => _setBorders('all'));
-    _btn(gCell, '□', 'Bordas (contorno)', () => _setBorders('outline'));
-    _btn(gCell, '⬜', 'Remover bordas', () => _setBorders('none'));
-
-    final gFmt = group();
-    _fmtSelect = _el<web.HTMLSelectElement>('select', 'xe-fmt', gFmt);
-    final fmts = <(String, String)>[
-      ('Geral', ''),
-      ('Número 1.234,56', '#,##0.00'),
-      ('Moeda R\$', '"R\$"\\ #,##0.00;[Red]\\-"R\$"\\ #,##0.00'),
-      ('Percentual', '0.00%'),
-      ('Data', 'dd/mm/yyyy'),
-      ('Texto', '@'),
-    ];
-    for (final (label, code) in fmts) {
-      final opt =
-          web.document.createElement('option') as web.HTMLOptionElement;
-      opt.value = code;
-      opt.textContent = label;
-      _fmtSelect.appendChild(opt);
-    }
-  }
-
   // ---------------------------------------------------------------------
   // Eventos
   // ---------------------------------------------------------------------
 
-  void _wireEvents() {
-    web.window.addEventListener('resize', ((web.Event _) {
-      _resizeCanvas();
-      _schedulePaint();
-    }).toJS);
+  /// Listener global (window/document) rastreado para remoção no [dispose].
+  void _listenGlobal(web.EventTarget target, String type, JSFunction handler) {
+    target.addEventListener(type, handler);
+    _globalListeners.add((target, type, handler));
+  }
 
-    _scroller.addEventListener('scroll', ((web.Event _) {
-      view.scrollX = _scroller.scrollLeft / _zoom;
-      view.scrollY = _scroller.scrollTop / _zoom;
-      if (_editing) _positionEditor();
-      _schedulePaint();
-    }).toJS);
+  void _wireEvents() {
+    _listenGlobal(
+        web.window,
+        'resize',
+        ((web.Event _) {
+          _resizeCanvas();
+          _schedulePaint();
+        }).toJS);
+
+    _scroller.addEventListener(
+        'scroll',
+        ((web.Event _) {
+          view.scrollX = _scroller.scrollLeft / _zoom;
+          view.scrollY = _scroller.scrollTop / _zoom;
+          if (_editing) _positionEditor();
+          _schedulePaint();
+        }).toJS);
 
     // Ctrl+roda = zoom (como no Excel).
     _scroller.addEventListener(
@@ -338,127 +337,121 @@ class SpreadsheetApp {
         }).toJS,
         web.AddEventListenerOptions(passive: false));
 
-    _scroller.addEventListener('mousedown',
-        ((web.MouseEvent e) => _onMouseDown(e)).toJS);
-    web.window.addEventListener('mousemove',
-        ((web.MouseEvent e) => _onMouseMove(e)).toJS);
-    web.window.addEventListener('mouseup',
-        ((web.MouseEvent e) => _onMouseUp(e)).toJS);
-    _scroller.addEventListener('dblclick',
-        ((web.MouseEvent e) => _onDblClick(e)).toJS);
-    _scroller.addEventListener('keydown',
-        ((web.KeyboardEvent e) => _onKeyDown(e)).toJS);
+    _scroller.addEventListener(
+        'mousedown', ((web.MouseEvent e) => _onMouseDown(e)).toJS);
+    _listenGlobal(
+        web.window, 'mousemove', ((web.MouseEvent e) => _onMouseMove(e)).toJS);
+    _listenGlobal(
+        web.window, 'mouseup', ((web.MouseEvent e) => _onMouseUp(e)).toJS);
+    _scroller.addEventListener(
+        'dblclick', ((web.MouseEvent e) => _onDblClick(e)).toJS);
+    _scroller.addEventListener(
+        'keydown', ((web.KeyboardEvent e) => _onKeyDown(e)).toJS);
 
-    _editor.addEventListener('keydown',
-        ((web.KeyboardEvent e) => _onEditorKey(e)).toJS);
+    _editor.addEventListener(
+        'keydown', ((web.KeyboardEvent e) => _onEditorKey(e)).toJS);
 
-    _formulaInput.addEventListener('keydown', ((web.KeyboardEvent e) {
-      if (e.key == 'Enter') {
-        e.preventDefault();
-        _commitText(_formulaInput.value, 1, 0);
-        _focusGrid();
-      } else if (e.key == 'Escape') {
-        e.preventDefault();
-        _updateFormulaBar();
-        _focusGrid();
-      }
-    }).toJS);
+    _formulaInput.addEventListener(
+        'keydown',
+        ((web.KeyboardEvent e) {
+          if (e.key == 'Enter') {
+            e.preventDefault();
+            _commitText(_formulaInput.value, 1, 0);
+            _focusGrid();
+          } else if (e.key == 'Escape') {
+            e.preventDefault();
+            _updateFormulaBar();
+            _focusGrid();
+          }
+        }).toJS);
 
-    _nameBox.addEventListener('keydown', ((web.KeyboardEvent e) {
-      if (e.key == 'Enter') {
-        e.preventDefault();
-        final ref = CellRef.tryParse(_nameBox.value.trim());
-        if (ref != null) {
-          _select(ref.row, ref.col);
-          _scrollIntoView(ref.row, ref.col);
-        }
-        _focusGrid();
-      }
-    }).toJS);
+    _nameBox.addEventListener(
+        'keydown',
+        ((web.KeyboardEvent e) {
+          if (e.key == 'Enter') {
+            e.preventDefault();
+            final ref = CellRef.tryParse(_nameBox.value.trim());
+            if (ref != null) {
+              _select(ref.row, ref.col);
+              _scrollIntoView(ref.row, ref.col);
+            }
+            _focusGrid();
+          }
+        }).toJS);
 
-    _zoomSelect.addEventListener('change', ((web.Event _) {
-      _zoom = (int.tryParse(_zoomSelect.value) ?? 100) / 100.0;
-      sheet.zoomScale = _zoom;
-      _syncSpacer();
-      _schedulePaint();
-      _focusGrid();
-    }).toJS);
+    _zoomSelect.addEventListener(
+        'change',
+        ((web.Event _) {
+          _zoom = (int.tryParse(_zoomSelect.value) ?? 100) / 100.0;
+          sheet.zoomScale = _zoom;
+          _syncSpacer();
+          _schedulePaint();
+          _focusGrid();
+        }).toJS);
 
-    _fontSelect.addEventListener('change', ((web.Event _) {
-      _applyStyle((st, xf) => st.deriveXf(xf,
-          font: st.fontOf(st.xfAt(xf)).copyWith(name: _fontSelect.value)));
-      _focusGrid();
-    }).toJS);
-    _sizeSelect.addEventListener('change', ((web.Event _) {
-      final size = double.tryParse(_sizeSelect.value) ?? 11;
-      _applyStyle((st, xf) => st.deriveXf(xf,
-          font: st.fontOf(st.xfAt(xf)).copyWith(size: size)));
-      _focusGrid();
-    }).toJS);
-    _fontColor.addEventListener('change', ((web.Event _) {
-      final hex = _fontColor.value.substring(1).toUpperCase();
-      _applyStyle((st, xf) => st.deriveXf(xf,
-          font: st.fontOf(st.xfAt(xf)).copyWith(
-              color: XlsxColor.rgbHex('FF$hex'))));
-      _focusGrid();
-    }).toJS);
-    _fillColor.addEventListener('change', ((web.Event _) {
-      final hex = _fillColor.value.substring(1).toUpperCase();
-      _applyStyle((st, xf) => st.deriveXf(xf,
-          fill: XlsxFill(
-              patternType: 'solid',
-              fgColor: XlsxColor.rgbHex('FF$hex'))));
-      _focusGrid();
-    }).toJS);
-    _fmtSelect.addEventListener('change', ((web.Event _) {
-      final code = _fmtSelect.value;
-      _applyStyle((st, xf) => st.deriveXf(xf,
-          numFmtId: code.isEmpty ? 0 : st.ensureNumFmt(code)));
-      _focusGrid();
-    }).toJS);
-
-    _fileInput.addEventListener('change', ((web.Event _) {
-      final files = _fileInput.files;
-      if (files == null || files.length == 0) return;
-      final reader = web.FileReader();
-      reader.onload = ((web.Event _) {
-        final buffer = reader.result as JSArrayBuffer;
-        _loadWorkbook(buffer.toDart.asUint8List());
-      }).toJS;
-      reader.readAsArrayBuffer(files.item(0)!);
-    }).toJS);
+    _fileInput.addEventListener(
+        'change',
+        ((web.Event _) {
+          final files = _fileInput.files;
+          if (files == null || files.length == 0) return;
+          final file = files.item(0)!;
+          final reader = web.FileReader();
+          reader.onload = ((web.Event _) {
+            final buffer = reader.result as JSArrayBuffer;
+            loadBytes(buffer.toDart.asUint8List(), fileName: file.name);
+          }).toJS;
+          reader.readAsArrayBuffer(file);
+        }).toJS);
 
     // Clipboard.
-    web.document.addEventListener('copy', ((web.ClipboardEvent e) {
-      if (_editing || !_gridHasFocus()) return;
-      e.preventDefault();
-      e.clipboardData?.setData('text/plain', _selectionToTsv());
-    }).toJS);
-    web.document.addEventListener('cut', ((web.ClipboardEvent e) {
-      if (_editing || !_gridHasFocus()) return;
-      e.preventDefault();
-      e.clipboardData?.setData('text/plain', _selectionToTsv());
-      _clearSelection();
-    }).toJS);
-    web.document.addEventListener('paste', ((web.ClipboardEvent e) {
-      if (_editing || !_gridHasFocus()) return;
-      final text = e.clipboardData?.getData('text/plain');
-      if (text == null || text.isEmpty) return;
-      e.preventDefault();
-      _pasteTsv(text);
-    }).toJS);
+    _listenGlobal(
+        web.document,
+        'copy',
+        ((web.ClipboardEvent e) {
+          if (_editing || !_gridHasFocus()) return;
+          e.preventDefault();
+          e.clipboardData?.setData('text/plain', _selectionToTsv());
+        }).toJS);
+    _listenGlobal(
+        web.document,
+        'cut',
+        ((web.ClipboardEvent e) {
+          if (_editing || _readOnly || !_gridHasFocus()) return;
+          e.preventDefault();
+          e.clipboardData?.setData('text/plain', _selectionToTsv());
+          _clearSelection();
+        }).toJS);
+    _listenGlobal(
+        web.document,
+        'paste',
+        ((web.ClipboardEvent e) {
+          if (_editing || _readOnly || !_gridHasFocus()) return;
+          final text = e.clipboardData?.getData('text/plain');
+          if (text == null || text.isEmpty) return;
+          e.preventDefault();
+          _pasteTsv(text);
+        }).toJS);
 
-    web.window.addEventListener('beforeunload', ((web.Event e) {
-      if (_dirty) (e as web.BeforeUnloadEvent).returnValue = 'sair?';
-    }).toJS);
+    if (options.confirmOnUnload) {
+      _listenGlobal(
+          web.window,
+          'beforeunload',
+          ((web.Event e) {
+            if (_dirty) (e as web.BeforeUnloadEvent).returnValue = 'sair?';
+          }).toJS);
+    }
   }
 
   bool _gridHasFocus() {
-    final active = web.document.activeElement;
-    return active == _scroller || active == web.document.body;
+    // Restrito ao scroller: em páginas host (embed) o `body` focado não
+    // pode capturar copy/cut/paste de outros componentes.
+    return web.document.activeElement == _scroller;
   }
 
   void _focusGrid() => _scroller.focus();
+
+  /// Devolve o foco à grade (após interações com a toolbar externa).
+  void focusGrid() => _focusGrid();
 
   // ---------------------------------------------------------------------
   // Coordenadas e hit-test
@@ -538,7 +531,8 @@ class SpreadsheetApp {
       }
       final c = hit.col;
       view.anchor = CellRef(0, c);
-      view.active = CellRef(view.scrollY > 0 ? layout.rows.indexAt(view.scrollY) : 0, c);
+      view.active =
+          CellRef(view.scrollY > 0 ? layout.rows.indexAt(view.scrollY) : 0, c);
       view.selection = CellRange(0, c, layout.rowCount - 1, c);
       _selecting = true;
       _afterSelectionChange();
@@ -570,8 +564,8 @@ class SpreadsheetApp {
 
     final row = hit.row, col = hit.col;
     if (e.shiftKey) {
-      view.selection = CellRange.normalized(
-          view.anchor.row, view.anchor.col, row, col);
+      view.selection =
+          CellRange.normalized(view.anchor.row, view.anchor.col, row, col);
       _expandSelectionToMerges();
     } else {
       _select(row, col);
@@ -620,7 +614,8 @@ class SpreadsheetApp {
     }
 
     if (!_selecting) return;
-    final hit = _hit(pos.x.clamp(kHeaderW * _zoom + 1, _scroller.clientWidth.toDouble()),
+    final hit = _hit(
+        pos.x.clamp(kHeaderW * _zoom + 1, _scroller.clientWidth.toDouble()),
         pos.y.clamp(kHeaderH * _zoom + 1, _scroller.clientHeight.toDouble()));
     if (hit.row < 0 || hit.col < 0) return;
     final sel = CellRange.normalized(
@@ -638,14 +633,14 @@ class SpreadsheetApp {
       _commands.push(ResizeCommand('Largura de coluna', _sheetIndex, true,
           _resizingCol, (_resizeStartSize - 5) / 7, p?.width));
       _resizingCol = -1;
-      _dirty = true;
+      _markDirty();
     }
     if (_resizingRow >= 0) {
       final p = sheet.rowProps[_resizingRow];
       _commands.push(ResizeCommand('Altura de linha', _sheetIndex, false,
           _resizingRow, _resizeStartSize * 72 / 96, p?.height));
       _resizingRow = -1;
-      _dirty = true;
+      _markDirty();
     }
     _selecting = false;
   }
@@ -669,27 +664,27 @@ class SpreadsheetApp {
       switch (key.toLowerCase()) {
         case 'z':
           e.preventDefault();
-          _undo();
+          undo();
           return;
         case 'y':
           e.preventDefault();
-          _redo();
+          redo();
           return;
         case 's':
           e.preventDefault();
-          _download();
+          download();
           return;
         case 'b':
           e.preventDefault();
-          _toggleFont((f) => f.copyWith(bold: !f.bold));
+          toggleBold();
           return;
         case 'i':
           e.preventDefault();
-          _toggleFont((f) => f.copyWith(italic: !f.italic));
+          toggleItalic();
           return;
         case 'u':
           e.preventDefault();
-          _toggleFont((f) => f.copyWith(underline: !f.underline));
+          toggleUnderline();
           return;
         case 'a':
           e.preventDefault();
@@ -752,10 +747,16 @@ class SpreadsheetApp {
       // Estende a partir da célula ativa mantendo a âncora.
       final sel = view.selection;
       var r2 = dr != 0
-          ? (dr < 0 ? (sel.r1 == view.anchor.row ? sel.r2 : sel.r1) : (sel.r2 == view.anchor.row ? sel.r1 : sel.r2)) + dr
+          ? (dr < 0
+                  ? (sel.r1 == view.anchor.row ? sel.r2 : sel.r1)
+                  : (sel.r2 == view.anchor.row ? sel.r1 : sel.r2)) +
+              dr
           : (sel.r1 == view.anchor.row ? sel.r2 : sel.r1);
       var c2 = dc != 0
-          ? (dc < 0 ? (sel.c1 == view.anchor.col ? sel.c2 : sel.c1) : (sel.c2 == view.anchor.col ? sel.c1 : sel.c2)) + dc
+          ? (dc < 0
+                  ? (sel.c1 == view.anchor.col ? sel.c2 : sel.c1)
+                  : (sel.c2 == view.anchor.col ? sel.c1 : sel.c2)) +
+              dc
           : (sel.c1 == view.anchor.col ? sel.c2 : sel.c1);
       r2 = r2.clamp(0, layout.rowCount - 1);
       c2 = c2.clamp(0, layout.colCount - 1);
@@ -800,12 +801,18 @@ class SpreadsheetApp {
       while (hasValue(r + dr, c + dc)) {
         r += dr;
         c += dc;
-        if (r < 0 || c < 0 || r > layout.rowCount - 2 || c > layout.colCount - 2) break;
+        if (r < 0 ||
+            c < 0 ||
+            r > layout.rowCount - 2 ||
+            c > layout.colCount - 2) break;
       }
     } else {
       r += dr;
       c += dc;
-      while (r >= 0 && c >= 0 && r < layout.rowCount && c < layout.colCount &&
+      while (r >= 0 &&
+          c >= 0 &&
+          r < layout.rowCount &&
+          c < layout.colCount &&
           !hasValue(r, c)) {
         r += dr;
         c += dc;
@@ -867,34 +874,35 @@ class SpreadsheetApp {
 
   void _afterSelectionChange({bool updateBar = true}) {
     if (updateBar) _updateFormulaBar();
-    _syncToolbarWithActive();
+    _notifySelectionStyle();
     _updateStatus();
     _schedulePaint();
   }
 
-  /// Reflete fonte/tamanho da célula ativa na toolbar (como o Excel).
-  void _syncToolbarWithActive() {
+  /// Publica o estado de estilo da célula ativa (a toolbar da fachada
+  /// espelha fonte/tamanho/negrito/alinhamento etc., como o Excel).
+  void _notifySelectionStyle() {
+    final callback = options.onSelectionChanged;
+    if (callback == null) return;
     final st = wb.styles;
-    final xf = st.xfAt(
-        sheet.effectiveStyleIndex(view.active.row, view.active.col));
+    final xf =
+        st.xfAt(sheet.effectiveStyleIndex(view.active.row, view.active.col));
     final font = st.fontOf(xf);
-    for (var i = 0; i < _fontSelect.options.length; i++) {
-      final opt = _fontSelect.options.item(i) as web.HTMLOptionElement;
-      if (opt.value.toLowerCase() == font.name.toLowerCase()) {
-        _fontSelect.value = opt.value;
-        break;
-      }
-    }
-    final sizeText = font.size == font.size.roundToDouble()
-        ? '${font.size.round()}'
-        : '${font.size}';
-    for (var i = 0; i < _sizeSelect.options.length; i++) {
-      final opt = _sizeSelect.options.item(i) as web.HTMLOptionElement;
-      if (opt.value == sizeText) {
-        _sizeSelect.value = sizeText;
-        break;
-      }
-    }
+    final align = xf.alignment ?? const XlsxAlignment();
+    callback(SelectionStyleState(
+      fontName: font.name,
+      fontSize: font.size,
+      bold: font.bold,
+      italic: font.italic,
+      underline: font.underline,
+      horizontal: align.horizontal,
+      vertical: align.vertical,
+      wrapText: align.wrapText,
+      merged: sheet.mergeAt(view.active.row, view.active.col) != null,
+      numFmtCode: st.numFmtCodeOf(xf) ?? '',
+      canUndo: _commands.canUndo,
+      canRedo: _commands.canRedo,
+    ));
   }
 
   void _scrollIntoView(int row, int col) {
@@ -919,6 +927,7 @@ class SpreadsheetApp {
   // ---------------------------------------------------------------------
 
   void _startEdit({required bool fromTyping, String initial = ''}) {
+    if (_readOnly) return;
     final cell = sheet.cellAt(view.active.row, view.active.col);
     _editing = true;
     _editorFromTyping = fromTyping;
@@ -998,8 +1007,16 @@ class SpreadsheetApp {
         if (_editorFromTyping && !_editor.value.startsWith('=')) {
           e.preventDefault();
           _commitEditor(
-              e.key == 'ArrowUp' ? -1 : e.key == 'ArrowDown' ? 1 : 0,
-              e.key == 'ArrowLeft' ? -1 : e.key == 'ArrowRight' ? 1 : 0);
+              e.key == 'ArrowUp'
+                  ? -1
+                  : e.key == 'ArrowDown'
+                      ? 1
+                      : 0,
+              e.key == 'ArrowLeft'
+                  ? -1
+                  : e.key == 'ArrowRight'
+                      ? 1
+                      : 0);
         }
     }
   }
@@ -1021,6 +1038,7 @@ class SpreadsheetApp {
 
   /// Converte texto digitado em valor/fórmula e grava na célula ativa.
   void _commitText(String text, int dr, int dc) {
+    if (_readOnly) return;
     final row = view.active.row, col = view.active.col;
     final cell = sheet.cellAt(row, col);
     final before = CellSnapshot.of(cell);
@@ -1067,7 +1085,7 @@ class SpreadsheetApp {
     _commands.push(CellsCommand('Editar célula', [
       CellPatch(_sheetIndex, CellRef(row, col), before, CellSnapshot.of(target))
     ]));
-    _dirty = true;
+    _markDirty();
 
     if (row > sheet.maxRow || col > sheet.maxCol) layout.rebuild();
     _syncSpacer();
@@ -1139,6 +1157,7 @@ class SpreadsheetApp {
   }
 
   void _applyStyle(int Function(StyleTable st, int xf) derive) {
+    if (_readOnly) return;
     final patches = <CellPatch>[];
     for (final (r, c) in _selectionCells()) {
       final cell = sheet.ensureCell(r, c);
@@ -1150,14 +1169,15 @@ class SpreadsheetApp {
     }
     if (patches.isNotEmpty) {
       _commands.push(CellsCommand('Formatar', patches));
-      _dirty = true;
+      _markDirty();
     }
     _renderer.invalidateStyles();
     _schedulePaint();
   }
 
   void _toggleFont(XlsxFont Function(XlsxFont) transform) {
-    _applyStyle((st, xf) => st.deriveXf(xf, font: transform(st.fontOf(st.xfAt(xf)))));
+    _applyStyle(
+        (st, xf) => st.deriveXf(xf, font: transform(st.fontOf(st.xfAt(xf)))));
   }
 
   void _setAlign({String? h, String? v}) {
@@ -1191,6 +1211,7 @@ class SpreadsheetApp {
   }
 
   void _setBorders(String mode) {
+    if (_readOnly) return;
     const side = BorderSide(style: 'thin', color: XlsxColor.rgbHex('FF000000'));
     final sel = view.selection;
     if (mode == 'all') {
@@ -1225,13 +1246,14 @@ class SpreadsheetApp {
     }
     if (patches.isNotEmpty) {
       _commands.push(CellsCommand('Bordas', patches));
-      _dirty = true;
+      _markDirty();
     }
     _renderer.invalidateStyles();
     _schedulePaint();
   }
 
   void _toggleMerge() {
+    if (_readOnly) return;
     final sel = view.selection;
     final existing = sheet.mergeAt(sel.r1, sel.c1);
     if (existing != null && existing == sel) {
@@ -1242,11 +1264,12 @@ class SpreadsheetApp {
       sheet.addMerge(sel);
       _commands.push(MergeCommand('Mesclar', _sheetIndex, sel, isMerge: true));
     }
-    _dirty = true;
+    _markDirty();
     _schedulePaint();
   }
 
   void _clearSelection() {
+    if (_readOnly) return;
     final patches = <CellPatch>[];
     for (final (r, c) in _selectionCells()) {
       final cell = sheet.cellAt(r, c);
@@ -1267,7 +1290,7 @@ class SpreadsheetApp {
     if (patches.isNotEmpty) {
       _commands.push(CellsCommand('Limpar', patches));
       _applyRecalc();
-      _dirty = true;
+      _markDirty();
     }
     _updateFormulaBar();
     _updateStatus();
@@ -1294,7 +1317,9 @@ class SpreadsheetApp {
   }
 
   void _pasteTsv(String text) {
-    final lines = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
+    if (_readOnly) return;
+    final lines =
+        text.replaceAll('\r\n', '\n').replaceAll('\r', '\n').split('\n');
     if (lines.isNotEmpty && lines.last.isEmpty) lines.removeLast();
     final startR = view.active.row, startC = view.active.col;
     final patches = <CellPatch>[];
@@ -1343,13 +1368,18 @@ class SpreadsheetApp {
     if (patches.isNotEmpty) {
       _commands.push(CellsCommand('Colar', patches));
       _applyRecalc();
-      _dirty = true;
+      _markDirty();
       view.selection = CellRange(
           startR,
           startC,
           startR + lines.length - 1,
           startC +
-              (lines.isEmpty ? 0 : lines.map((l) => l.split('\t').length).reduce((a, b) => a > b ? a : b) - 1));
+              (lines.isEmpty
+                  ? 0
+                  : lines
+                          .map((l) => l.split('\t').length)
+                          .reduce((a, b) => a > b ? a : b) -
+                      1));
       layout.rebuild();
       _syncSpacer();
       _afterSelectionChange();
@@ -1406,16 +1436,19 @@ class SpreadsheetApp {
     }
     _renderer.invalidateStyles();
     _updateFormulaBar();
+    _notifySelectionStyle();
     _updateStatus();
     _schedulePaint();
   }
 
-  void _undo() {
+  void undo() {
+    if (_readOnly) return;
     final c = _commands.popUndo();
     if (c != null) _applyCommand(c, undo: true);
   }
 
-  void _redo() {
+  void redo() {
+    if (_readOnly) return;
     final c = _commands.popRedo();
     if (c != null) _applyCommand(c, undo: false);
   }
@@ -1431,18 +1464,20 @@ class SpreadsheetApp {
       tab.className = i == _sheetIndex ? 'xe-tab xe-tab-active' : 'xe-tab';
       tab.textContent = wb.sheets[i].name;
       final index = i;
-      tab.addEventListener('click', ((web.Event _) {
-        if (_editing) _commitEditor(0, 0);
-        _sheetIndex = index;
-        _rebuildTabs();
-        _syncSpacer();
-        _scroller.scrollLeft = (view.scrollX * _zoom).roundToDouble();
-        _scroller.scrollTop = (view.scrollY * _zoom).roundToDouble();
-        _updateFormulaBar();
-        _updateStatus();
-        _schedulePaint();
-        _focusGrid();
-      }).toJS);
+      tab.addEventListener(
+          'click',
+          ((web.Event _) {
+            if (_editing) _commitEditor(0, 0);
+            _sheetIndex = index;
+            _rebuildTabs();
+            _syncSpacer();
+            _scroller.scrollLeft = (view.scrollX * _zoom).roundToDouble();
+            _scroller.scrollTop = (view.scrollY * _zoom).roundToDouble();
+            _updateFormulaBar();
+            _updateStatus();
+            _schedulePaint();
+            _focusGrid();
+          }).toJS);
       _tabs.appendChild(tab);
     }
   }
@@ -1478,8 +1513,8 @@ class SpreadsheetApp {
     String fmt(double v) {
       final fixed = v.toStringAsFixed(2);
       final parts = fixed.split('.');
-      final intPart = parts[0].replaceAllMapped(
-          RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => '.');
+      final intPart = parts[0]
+          .replaceAllMapped(RegExp(r'\B(?=(\d{3})+(?!\d))'), (m) => '.');
       return '$intPart,${parts[1]}';
     }
 
@@ -1512,7 +1547,7 @@ class SpreadsheetApp {
   }
 
   void _schedulePaint() {
-    if (_painting) return;
+    if (_painting || _disposed) return;
     _painting = true;
     web.window.requestAnimationFrame(((double _) {
       _painting = false;
@@ -1521,6 +1556,7 @@ class SpreadsheetApp {
   }
 
   void _paint() {
+    if (_disposed) return;
     final rect = _gridWrap.getBoundingClientRect();
     if (rect.width == 0) return;
     _renderer.paint(
@@ -1537,15 +1573,30 @@ class SpreadsheetApp {
     );
   }
 
+  void _markDirty() {
+    _dirty = true;
+    _notifySelectionStyle();
+    options.onChange?.call();
+  }
+
   // ---------------------------------------------------------------------
-  // Abrir / salvar
+  // API pública (usada pela fachada XlsxEditorWidget e por hosts diretos)
   // ---------------------------------------------------------------------
 
-  void _loadWorkbook(Uint8List bytes) {
+  /// Abre o seletor de arquivo .xlsx nativo.
+  void openFilePicker() => _fileInput.click();
+
+  /// Carrega um novo workbook a partir dos bytes de um .xlsx.
+  void loadBytes(Uint8List bytes, {String? fileName}) {
     try {
       doc = readXlsx(bytes);
     } catch (err) {
-      web.window.alert('Falha ao abrir o arquivo: $err');
+      final onError = options.onError;
+      if (onError != null) {
+        onError(err);
+      } else {
+        web.window.alert('Falha ao abrir o arquivo: $err');
+      }
       return;
     }
     _sheetIndex = wb.activeSheet;
@@ -1555,6 +1606,7 @@ class SpreadsheetApp {
       _canvas.getContext('2d') as web.CanvasRenderingContext2D,
       ImageStore(_schedulePaint),
       (path) => doc.mediaBytes(path),
+      theme: options.theme,
     );
     _dirty = false;
     _zoom = sheet.zoomScale.clamp(0.5, 2.0);
@@ -1562,13 +1614,21 @@ class SpreadsheetApp {
     _rebuildTabs();
     _syncSpacer();
     _updateFormulaBar();
+    _notifySelectionStyle();
     _updateStatus();
     _schedulePaint();
+    if (fileName != null) options.onFileOpened?.call(fileName);
   }
 
-  void _download() {
+  /// Serializa o workbook atual como bytes de um .xlsx.
+  Uint8List saveBytes() {
     if (_editing) _commitEditor(0, 0);
-    final bytes = writeXlsx(doc);
+    return writeXlsx(doc);
+  }
+
+  /// Baixa o workbook atual como arquivo .xlsx.
+  void download([String? fileName]) {
+    final bytes = saveBytes();
     final blob = web.Blob(
       [bytes.toJS as web.BlobPart].toJS,
       web.BlobPropertyBag(
@@ -1578,9 +1638,68 @@ class SpreadsheetApp {
     final url = web.URL.createObjectURL(blob);
     final a = web.document.createElement('a') as web.HTMLAnchorElement;
     a.href = url;
-    a.download = 'planilha_editada.xlsx';
+    a.download = fileName ?? 'planilha_editada.xlsx';
     a.click();
     web.URL.revokeObjectURL(url);
     _dirty = false;
+  }
+
+  /// Alterna edição/somente-leitura em runtime (modo visualizador).
+  void setReadOnly(bool value) {
+    if (_readOnly == value) return;
+    _readOnly = value;
+    if (value && _editing) _cancelEditor();
+    _formulaInput.readOnly = value;
+  }
+
+  void toggleBold() => _toggleFont((f) => f.copyWith(bold: !f.bold));
+  void toggleItalic() => _toggleFont((f) => f.copyWith(italic: !f.italic));
+  void toggleUnderline() =>
+      _toggleFont((f) => f.copyWith(underline: !f.underline));
+
+  /// Alinhamento horizontal ('left'|'center'|'right') e/ou vertical
+  /// ('top'|'center'|'bottom') da seleção.
+  void setAlignment({String? horizontal, String? vertical}) =>
+      _setAlign(h: horizontal, v: vertical);
+
+  void toggleWrapText() => _toggleWrap();
+  void toggleMergeSelection() => _toggleMerge();
+
+  /// Bordas da seleção: 'all' | 'outline' | 'none'.
+  void setBorderPreset(String preset) => _setBorders(preset);
+
+  void applyFontName(String name) => _applyStyle((st, xf) =>
+      st.deriveXf(xf, font: st.fontOf(st.xfAt(xf)).copyWith(name: name)));
+
+  void applyFontSize(double size) => _applyStyle((st, xf) =>
+      st.deriveXf(xf, font: st.fontOf(st.xfAt(xf)).copyWith(size: size)));
+
+  /// Cor da fonte, hex `RRGGBB` (sem `#`).
+  void applyFontColor(String rgbHex) => _applyStyle((st, xf) => st.deriveXf(xf,
+      font: st
+          .fontOf(st.xfAt(xf))
+          .copyWith(color: XlsxColor.rgbHex('FF${rgbHex.toUpperCase()}'))));
+
+  /// Cor de preenchimento, hex `RRGGBB` (sem `#`).
+  void applyFillColor(String rgbHex) => _applyStyle((st, xf) => st.deriveXf(xf,
+      fill: XlsxFill(
+          patternType: 'solid',
+          fgColor: XlsxColor.rgbHex('FF${rgbHex.toUpperCase()}'))));
+
+  /// Formato numérico da seleção (código OOXML; vazio = Geral).
+  void applyNumberFormat(String code) => _applyStyle((st, xf) =>
+      st.deriveXf(xf, numFmtId: code.isEmpty ? 0 : st.ensureNumFmt(code)));
+
+  /// Remove listeners globais e o DOM da shell (para `ngOnDestroy`).
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _resizeObserver?.disconnect();
+    _resizeObserver = null;
+    for (final (target, type, handler) in _globalListeners) {
+      target.removeEventListener(type, handler);
+    }
+    _globalListeners.clear();
+    _root.remove();
   }
 }

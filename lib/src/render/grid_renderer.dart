@@ -72,16 +72,80 @@ const double kHeaderW = 46;
 const double kHeaderH = 22;
 const double kEmuPerPx = 9525;
 
+/// Cores da grade (seleção, headers, gridlines).
+///
+/// O padrão segue a paleta do canvas-editor-port (azul `#185abd`,
+/// superfícies `#f8fafc`, bordas `#d9dee7`).
+class GridTheme {
+  final String gridLine;
+  final String selectionFill;
+  final String selectionBorder;
+  final String fillHandle;
+  final String headerBg;
+  final String headerSelectedBg;
+  final String headerAccent;
+  final String headerText;
+  final String headerSelectedText;
+  final String headerLine;
+  final String headerOuterLine;
+
+  const GridTheme({
+    required this.gridLine,
+    required this.selectionFill,
+    required this.selectionBorder,
+    required this.fillHandle,
+    required this.headerBg,
+    required this.headerSelectedBg,
+    required this.headerAccent,
+    required this.headerText,
+    required this.headerSelectedText,
+    required this.headerLine,
+    required this.headerOuterLine,
+  });
+
+  /// Paleta padrão (azul, alinhada ao canvas-editor-port).
+  static const GridTheme blue = GridTheme(
+    gridLine: '#D8DDE6',
+    selectionFill: 'rgba(24,90,189,0.10)',
+    selectionBorder: '#185ABD',
+    fillHandle: '#185ABD',
+    headerBg: '#F8FAFC',
+    headerSelectedBg: '#DBE7F7',
+    headerAccent: '#185ABD',
+    headerText: '#445062',
+    headerSelectedText: '#185ABD',
+    headerLine: '#C9D2DE',
+    headerOuterLine: '#BCC5D2',
+  );
+
+  /// Paleta verde clássica do Excel.
+  static const GridTheme excelGreen = GridTheme(
+    gridLine: '#D8D8D8',
+    selectionFill: 'rgba(16,124,65,0.10)',
+    selectionBorder: '#107C41',
+    fillHandle: '#107C41',
+    headerBg: '#F8F8F8',
+    headerSelectedBg: '#CAEAD8',
+    headerAccent: '#107C41',
+    headerText: '#444444',
+    headerSelectedText: '#0E6B39',
+    headerLine: '#C6C6C6',
+    headerOuterLine: '#B5B5B5',
+  );
+}
+
 class GridRenderer {
   final Workbook workbook;
   final web.CanvasRenderingContext2D ctx;
   final ImageStore images;
   final Uint8List? Function(String mediaPath) mediaBytes;
+  final GridTheme theme;
 
   final Map<int, ResolvedStyle> _styleCache = {};
   final Map<String, double> _measureCache = {};
 
-  GridRenderer(this.workbook, this.ctx, this.images, this.mediaBytes);
+  GridRenderer(this.workbook, this.ctx, this.images, this.mediaBytes,
+      {this.theme = GridTheme.blue});
 
   void invalidateStyles() => _styleCache.clear();
 
@@ -234,7 +298,7 @@ class GridRenderer {
       double contentW,
       double contentH) {
     if (!sheet.showGridLines) return;
-    ctx.strokeStyle = '#D8D8D8'.toJS;
+    ctx.strokeStyle = theme.gridLine.toJS;
     ctx.lineWidth = 1;
     ctx.beginPath();
     final xMax = scrollX + contentW;
@@ -621,7 +685,7 @@ class GridRenderer {
     // Preenchimento translúcido, exceto sobre a célula ativa (4 retângulos
     // ao redor dela).
     final a = layout.cellRect(active.row, active.col);
-    ctx.fillStyle = 'rgba(16,124,65,0.10)'.toJS;
+    ctx.fillStyle = theme.selectionFill.toJS;
     final topH = (a.y - y).clamp(0.0, h);
     final bottomY = a.y + a.h;
     final leftW = (a.x - x).clamp(0.0, w);
@@ -635,12 +699,12 @@ class GridRenderer {
       if (rightX < x + w) ctx.fillRect(rightX, midY, x + w - rightX, midH);
     }
 
-    ctx.strokeStyle = '#107C41'.toJS;
+    ctx.strokeStyle = theme.selectionBorder.toJS;
     ctx.lineWidth = 2;
     ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
 
     // Alça de preenchimento.
-    ctx.fillStyle = '#107C41'.toJS;
+    ctx.fillStyle = theme.fillHandle.toJS;
     ctx.fillRect(x + w - 3.5, y + h - 3.5, 6, 6);
     ctx.strokeStyle = '#FFFFFF'.toJS;
     ctx.lineWidth = 1;
@@ -664,7 +728,7 @@ class GridRenderer {
     final fontPx = 10 * zoom;
 
     // Fundo dos headers.
-    ctx.fillStyle = '#F8F8F8'.toJS;
+    ctx.fillStyle = theme.headerBg.toJS;
     ctx.fillRect(0, 0, viewW, headerH);
     ctx.fillRect(0, 0, headerW, viewH);
 
@@ -682,19 +746,20 @@ class GridRenderer {
       final x = headerW + (layout.cols.posOf(c) - scrollX) * zoom;
       final selected = c >= selection.c1 && c <= selection.c2;
       if (selected) {
-        ctx.fillStyle = '#CAEAD8'.toJS;
+        ctx.fillStyle = theme.headerSelectedBg.toJS;
         ctx.fillRect(x, 0, w, headerH);
-        // Filete verde na borda interna (como o Excel).
-        ctx.fillStyle = '#107C41'.toJS;
+        // Filete de destaque na borda interna (como o Excel).
+        ctx.fillStyle = theme.headerAccent.toJS;
         ctx.fillRect(x, headerH - 2, w, 2);
       }
-      ctx.strokeStyle = '#C6C6C6'.toJS;
+      ctx.strokeStyle = theme.headerLine.toJS;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(x + w + 0.5, 0);
       ctx.lineTo(x + w + 0.5, headerH);
       ctx.stroke();
-      ctx.fillStyle = (selected ? '#0E6B39' : '#444444').toJS;
+      ctx.fillStyle =
+          (selected ? theme.headerSelectedText : theme.headerText).toJS;
       final label = colName(c);
       final tw = measure(ctx.font, label);
       ctx.fillText(label, x + (w - tw) / 2, headerH / 2 + 1);
@@ -712,18 +777,19 @@ class GridRenderer {
       final y = headerH + (layout.rows.posOf(r) - scrollY) * zoom;
       final selected = r >= selection.r1 && r <= selection.r2;
       if (selected) {
-        ctx.fillStyle = '#CAEAD8'.toJS;
+        ctx.fillStyle = theme.headerSelectedBg.toJS;
         ctx.fillRect(0, y, headerW, h);
-        ctx.fillStyle = '#107C41'.toJS;
+        ctx.fillStyle = theme.headerAccent.toJS;
         ctx.fillRect(headerW - 2, y, 2, h);
       }
-      ctx.strokeStyle = '#C6C6C6'.toJS;
+      ctx.strokeStyle = theme.headerLine.toJS;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(0, y + h + 0.5);
       ctx.lineTo(headerW, y + h + 0.5);
       ctx.stroke();
-      ctx.fillStyle = (selected ? '#0E6B39' : '#444444').toJS;
+      ctx.fillStyle =
+          (selected ? theme.headerSelectedText : theme.headerText).toJS;
       final label = '${r + 1}';
       final tw = measure(ctx.font, label);
       ctx.fillText(label, headerW - 5 - tw, y + h / 2 + 1);
@@ -731,7 +797,7 @@ class GridRenderer {
     ctx.restore();
 
     // Bordas externas + canto.
-    ctx.strokeStyle = '#B5B5B5'.toJS;
+    ctx.strokeStyle = theme.headerOuterLine.toJS;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, headerH + 0.5);
